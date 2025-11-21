@@ -19,8 +19,9 @@ This repository provides a robust "Jump Host" or "Bastion" infrastructure using 
     ```
 4.  **The Handoff Script (Running as Root):**
     * **Sanity Checks:** Verifies parent process is `sudo`, checks numeric ownership of key files, etc.
-    * **Cryptographic Verification:** Reads `SSH_USER_AUTH` to verify the key used is the one authorized for `alice`. It uses a strict regex check (`^command="... $USER",.* $TYPE $BLOB`) to ensure the key blob matches the authorized command line.
+    * **Cryptographic Verification:** Reads `SSH_USER_AUTH` to verify the key used is the one authorized for `alice`.
     * **JIT Provisioning:** Creates `noc-alice` if needed.
+    * **Path Injection:** Safely injects `~/bin` from the gateway into the new user's `.bashrc` if owned by root.
     * **Session Switch:** Executes `runuser` (preferred) or `env -i su -` to cleanly switch to `noc-alice`.
 
 ## 2. Directory Layout

@@ -148,21 +148,55 @@ if ! id "$TARGET_USER" &>/dev/null; then
         -K UID_MAX="$MAX_ID" \
         "$TARGET_USER" 2>/dev/null; then
         
+        # Handle Race Condition
         if ! id "$TARGET_USER" &>/dev/null; then
              log_and_exit "Failed to create user $TARGET_USER."
         fi
     else
-        # Path Injection
+        # --- PATH Injection ---
         TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
         GATEWAY_HOME=$(getent passwd "$GATEWAY_USER" | cut -d: -f6)
         BASH_RC="$TARGET_HOME/.bashrc"
         
         if [ -d "$TARGET_HOME" ] && [ -n "$GATEWAY_HOME" ]; then
-            touch "$BASH_RC"
-            echo "" >> "$BASH_RC"
-            echo "# Added by ssh-handoff" >> "$BASH_RC"
-            echo "export PATH=\"\$PATH:$GATEWAY_HOME/bin\"" >> "$BASH_RC"
-            chown "$TARGET_USER:$GATEWAY_USER" "$BASH_RC"
+            # create if missing
+            if [ ! -f "$BASH_RC" ]; then
+                install -m 0600 -o "$TARGET_USER" -g "$TARGET_USER" /dev/null "$BASH_RC"
+            fi
+
+            # refuse to modify if it is a symlink or unsafe
+            if [ -L "$BASH_RC" ]; then
+                logger -t ssh-handoff "WARN: .bashrc for $TARGET_USER is a symlink - skipping PATH injection"
+            else
+                # Idempotency check
+                if ! grep -Fq "Shared team tools (added by ssh-handoff)" "$BASH_RC"; then
+                    {
+                        echo ""
+                        echo "# Shared team tools (added by ssh-handoff)"
+                        # We inject the gateway home path
+                        echo "TEAMTOOLS_DIR=\"$GATEWAY_HOME/bin\""
+                        echo "if [ -d \"\$TEAMTOOLS_DIR\" ]; then"
+                        echo "    TT_UID=\$(stat -f \"%u\" \"\$TEAMTOOLS_DIR\" 2>/dev/null || stat -c \"%u\" \"\$TEAMTOOLS_DIR\" 2>/dev/null)"
+                        echo "    TT_MODE=\$(stat -f \"%Lp\" \"\$TEAMTOOLS_DIR\" 2>/dev/null || stat -c \"%a\" \"\$TEAMTOOLS_DIR\" 2>/dev/null)"
+                        echo "    case \"\$TT_MODE\" in"
+                        echo "        *[2367]) TT_PERM_BAD=true ;;"
+                        echo "        *) TT_PERM_BAD=false ;;"
+                        echo "    esac"
+                        echo "    if [ \"\$TT_UID\" = \"0\" ] && [ \"\$TT_PERM_BAD\" = false ]; then"
+                        echo "        case \":\$PATH:\" in"
+                        echo "            *:\$TEAMTOOLS_DIR:*) ;;"
+                        echo "            *) PATH=\"\$TEAMTOOLS_DIR:\$PATH\" ;;"
+                        echo "        esac"
+                        echo "    fi"
+                        echo "fi"
+                    } >> "$BASH_RC"
+
+                    # Ensure permissions are correct
+                    chown "$TARGET_USER:$GATEWAY_USER" "$BASH_RC"
+                    chmod 0600 "$BASH_RC"
+                    logger -t ssh-handoff "Injected secure PATH check into $BASH_RC"
+                fi
+            fi
         fi
     fi
 fi
@@ -179,6 +213,5 @@ if command -v runuser >/dev/null 2>&1; then
     exec runuser -l "$TARGET_USER"
 else
     # Fallback to su, using env -i to scrub environment
-    # We MUST preserve TERM, otherwise interactive sessions break
     exec env -i TERM="${TERM:-}" su - "$TARGET_USER"
 fi

@@ -21,7 +21,8 @@
   ansible.builtin.file:
     path: "/home/{{ gateway_user }}/bin"
     state: directory
-    owner: "{{ gateway_user }}"
+    # UPDATED: Owned by root to satisfy the secure path check in ssh-handoff
+    owner: root
     group: "{{ gateway_user }}"
     mode: '0750'
 
