@@ -10,14 +10,12 @@
     password_lock: yes
 
 # --- Bin Directory & Permissions ---
-# We must ensure the gateway home and bin directory are accessible
-# to members of the group (the auto-created users).
 
 - name: "Ensure gateway home {{ gateway_user }} is group traverseable"
   ansible.builtin.file:
     path: "/home/{{ gateway_user }}"
     state: directory
-    mode: '0750' # User: rwx, Group: r-x (allows entering dir), Other: ---
+    mode: '0750'
 
 - name: "Ensure {{ gateway_user }} bin directory exists"
   ansible.builtin.file:
@@ -27,7 +25,7 @@
     group: "{{ gateway_user }}"
     mode: '0750'
 
-# --- End Bin Setup ---
+# --- Authorized Keys Management ---
 
 - name: "Find local key files for {{ gateway_user }}"
   ansible.builtin.find:
@@ -47,6 +45,8 @@
     mode: '0644'
   vars:
     user_key_files: "{{ gateway_key_files.files }}"
+
+# --- Sudo & SSH Access ---
 
 - name: "Allow {{ gateway_user }} to run handoff script via sudo"
   ansible.builtin.lineinfile:

@@ -14,6 +14,8 @@
     ssh_options: "no-port-forwarding,no-x11-forwarding,no-agent-forwarding"
 
   tasks:
+    # --- Global Setup ---
+    
     - name: "Ensure secure authorized_keys directory exists"
       ansible.builtin.file:
         path: "{{ target_auth_dir }}"
@@ -22,7 +24,7 @@
         group: root
         mode: '0755'
 
-    - name: "Deploy the GENERIC handoff script"
+    - name: "Deploy the HARDENED handoff script"
       ansible.builtin.copy:
         src: ./files/ssh-handoff.sh
         dest: "{{ handoff_script_path }}"
@@ -44,6 +46,8 @@
         line: 'ExposeAuthInfo yes'
       notify: Restart SSH
 
+    # --- Loop Over Gateways ---
+    
     - name: "Deploy Gateway Users"
       include_tasks: tasks/deploy_gateway.yml
       loop: "{{ gateways }}"
