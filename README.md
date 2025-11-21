@@ -11,7 +11,7 @@ This repository provides a robust "Jump Host" or "Bastion" infrastructure using 
     ssh noc@target-host
     ```
 2.  **Authentication (SSHD):**
-    * `sshd` checks `/etc/ssh/authorized_keys/noc` (root-owned).
+    * `sshd` checks `/etc/ssh/authorized_keys.d/noc` (root-owned).
     * It finds Alice's public key with a forced `command="..."`.
 3.  **Trigger:** Instead of giving Alice a shell as `noc`, `sshd` executes:
     ```bash
@@ -19,7 +19,7 @@ This repository provides a robust "Jump Host" or "Bastion" infrastructure using 
     ```
 4.  **The Handoff Script (Running as Root):**
     * **Sanity Checks:** Verifies parent process is `sudo`, checks numeric ownership of key files, etc.
-    * **Cryptographic Verification:** Reads `SSH_USER_AUTH` to verify the key used is the one authorized for `alice`.
+    * **Cryptographic Verification:** Reads `SSH_USER_AUTH` to verify the key used is the one authorized for `alice`. It uses a strict regex check (`^command="... $USER",.* $TYPE $BLOB`) to ensure the key blob matches the authorized command line.
     * **JIT Provisioning:** Creates `noc-alice` if needed.
     * **Path Injection:** Safely injects `~/bin` from the gateway into the new user's `.bashrc` if owned by root.
     * **Session Switch:** Executes `runuser` (preferred) or `env -i su -` to cleanly switch to `noc-alice`.
@@ -34,7 +34,7 @@ This repository provides a robust "Jump Host" or "Bastion" infrastructure using 
 
 ## 3. Security Features
 
-* **Strict File Permissions:** `authorized_keys` stored in `/etc/ssh/` and owned by `root`.
+* **Strict File Permissions:** `authorized_keys` stored in `/etc/ssh/authorized_keys.d/` and owned by `root`.
 * **Numeric ID Checks:** Script verifies UID 0 ownership to avoid name spoofing.
 * **Path Safety:** Uses `readlink -f` to resolve paths and block symlinks.
 * **Audit Logging:** Logs the SHA fingerprint of the key used for access.

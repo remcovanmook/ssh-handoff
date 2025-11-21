@@ -9,7 +9,7 @@
       - sre
     
     key_source_root: "./public_keys"
-    target_auth_dir: "/etc/ssh/authorized_keys"
+    target_auth_dir: "/etc/ssh/authorized_keys.d"
     handoff_script_path: "/usr/local/bin/ssh-handoff.sh"
     ssh_options: "no-port-forwarding,no-x11-forwarding,no-agent-forwarding"
 

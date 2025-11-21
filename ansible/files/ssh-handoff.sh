@@ -13,7 +13,7 @@ readonly MIN_ID=2000
 readonly MAX_ID=5000
 readonly EXPECTED_OWNER_UID=0
 readonly MAX_USERNAME_LEN=32
-readonly AUTH_KEYS_DIR="/etc/ssh/authorized_keys"
+readonly AUTH_KEYS_DIR="/etc/ssh/authorized_keys.d"
 
 # === Arguments ===
 # $1 is the requested user (e.g. "alice")
@@ -153,7 +153,7 @@ if ! id "$TARGET_USER" &>/dev/null; then
              log_and_exit "Failed to create user $TARGET_USER."
         fi
     else
-        # --- PATH Injection ---
+        # Path Injection
         TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
         GATEWAY_HOME=$(getent passwd "$GATEWAY_USER" | cut -d: -f6)
         BASH_RC="$TARGET_HOME/.bashrc"
