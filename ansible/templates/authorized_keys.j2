@@ -1,0 +1,17 @@
+#
+# THIS FILE IS MANAGED BY ANSIBLE
+# Gateway: {{ gateway_user }}
+#
+{#
+  'user_key_files' is passed from the deploy_gateway.yml task.
+#}
+{% for keyfile in user_key_files %}
+{%   set base_username = keyfile.path | basename | splitext | first %}
+# --- Keys for user: {{ base_username }} (Target: {{ gateway_user }}-{{ base_username }}) ---
+{%   for key_line in lookup('file', keyfile.path).splitlines() %}
+{%     if key_line and not key_line.startswith('#') %}
+command="sudo {{ handoff_script_path }} {{ base_username }}",{{ ssh_options }} {{ key_line }}
+{%     endif %}
+{%   endfor %}
+
+{% endfor %}

@@ -1,0 +1,57 @@
+---
+- name: Manage SSH Handoff Gateways
+  hosts: all
+  become: yes
+  
+  vars:
+    gateways:
+      - noc
+      - sre
+    
+    key_source_root: "./public_keys"
+    target_auth_dir: "/etc/ssh/authorized_keys"
+    handoff_script_path: "/usr/local/bin/ssh-handoff.sh"
+    ssh_options: "no-port-forwarding,no-x11-forwarding,no-agent-forwarding"
+
+  tasks:
+    - name: "Ensure secure authorized_keys directory exists"
+      ansible.builtin.file:
+        path: "{{ target_auth_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: "Deploy the GENERIC handoff script"
+      ansible.builtin.copy:
+        src: ./files/ssh-handoff.sh
+        dest: "{{ handoff_script_path }}"
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: "Update sudoers to keep SSH_USER_AUTH env var"
+      ansible.builtin.lineinfile:
+        path: "/etc/sudoers.d/99-ssh-handoff"
+        line: 'Defaults env_keep += "SSH_USER_AUTH"'
+        create: yes
+        mode: '0440'
+
+    - name: "Enable ExposeAuthInfo in sshd_config"
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^ExposeAuthInfo'
+        line: 'ExposeAuthInfo yes'
+      notify: Restart SSH
+
+    - name: "Deploy Gateway Users"
+      include_tasks: tasks/deploy_gateway.yml
+      loop: "{{ gateways }}"
+      loop_control:
+        loop_var: gateway_user
+
+  handlers:
+    - name: Restart SSH
+      ansible.builtin.service:
+        name: sshd
+        state: restarted

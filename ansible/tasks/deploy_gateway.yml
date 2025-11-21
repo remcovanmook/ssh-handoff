@@ -1,0 +1,105 @@
+---
+# Tasks to deploy a single gateway user (e.g. 'noc' or 'sre')
+
+- name: "Ensure gateway user '{{ gateway_user }}' exists"
+  ansible.builtin.user:
+    name: "{{ gateway_user }}"
+    shell: /usr/sbin/nologin
+    create_home: yes
+    state: present
+    password_lock: yes
+
+# --- Bin Directory & Permissions ---
+# We must ensure the gateway home and bin directory are accessible
+# to members of the group (the auto-created users).
+
+- name: "Ensure gateway home {{ gateway_user }} is group traverseable"
+  ansible.builtin.file:
+    path: "/home/{{ gateway_user }}"
+    state: directory
+    mode: '0750' # User: rwx, Group: r-x (allows entering dir), Other: ---
+
+- name: "Ensure {{ gateway_user }} bin directory exists"
+  ansible.builtin.file:
+    path: "/home/{{ gateway_user }}/bin"
+    state: directory
+    owner: "{{ gateway_user }}"
+    group: "{{ gateway_user }}"
+    mode: '0750'
+
+# --- End Bin Setup ---
+
+- name: "Find local key files for {{ gateway_user }}"
+  ansible.builtin.find:
+    paths: "{{ key_source_root }}/{{ gateway_user }}"
+    patterns: "*.keys"
+    file_type: file
+  register: gateway_key_files
+  delegate_to: localhost
+  become: no
+
+- name: "Generate authorized_keys for {{ gateway_user }}"
+  ansible.builtin.template:
+    src: ../templates/authorized_keys.j2
+    dest: "{{ target_auth_dir }}/{{ gateway_user }}"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    user_key_files: "{{ gateway_key_files.files }}"
+
+- name: "Allow {{ gateway_user }} to run handoff script via sudo"
+  ansible.builtin.lineinfile:
+    path: "/etc/sudoers.d/99-ssh-handoff"
+    line: "{{ gateway_user }}    ALL=(root)    NOPASSWD: {{ handoff_script_path }}"
+    state: present
+    validate: 'visudo -cf %s'
+
+- name: "Configure DenyUsers for {{ gateway_user }} targets"
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^DenyUsers {{ gateway_user }}-\\*"
+    line: "DenyUsers {{ gateway_user }}-*"
+    state: present
+  notify: Restart SSH
+
+- name: "Configure Match User block for {{ gateway_user }}"
+  ansible.builtin.blockinfile:
+    path: /etc/ssh/sshd_config
+    marker: "# {mark} ANSIBLE MANAGED BLOCK FOR {{ gateway_user }}"
+    block: |
+      Match User {{ gateway_user }}
+          PasswordAuthentication no
+          AuthorizedKeysFile {{ target_auth_dir }}/%u
+  notify: Restart SSH
+
+# --- User Cleanup Logic ---
+
+- name: "Get all system users"
+  ansible.builtin.getent:
+    database: passwd
+
+- name: "Identify stale {{ gateway_user }} accounts"
+  set_fact:
+    stale_users: >-
+      {{
+        ansible_facts.getent_passwd.keys()
+        | select('match', '^' + gateway_user + '-')
+        | difference(
+            gateway_key_files.files
+            | map(attribute='path')
+            | map('basename')
+            | map('splitext')
+            | map('first')
+            | map('regex_replace', '^', gateway_user + '-')
+            | list
+          )
+      }}
+
+- name: "Remove stale users for gateway {{ gateway_user }}"
+  ansible.builtin.user:
+    name: "{{ item }}"
+    state: absent
+    remove: yes
+    force: yes
+  loop: "{{ stale_users }}"
