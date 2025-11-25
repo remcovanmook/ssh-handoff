@@ -153,7 +153,7 @@ if ! id "$TARGET_USER" &>/dev/null; then
              log_and_exit "Failed to create user $TARGET_USER."
         fi
     else
-        # Path Injection
+        # --- PATH Injection ---
         TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
         GATEWAY_HOME=$(getent passwd "$GATEWAY_USER" | cut -d: -f6)
         BASH_RC="$TARGET_HOME/.bashrc"

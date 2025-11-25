@@ -24,13 +24,50 @@ This repository provides a robust "Jump Host" or "Bastion" infrastructure using 
     * **Path Injection:** Safely injects `~/bin` from the gateway into the new user's `.bashrc` if owned by root.
     * **Session Switch:** Executes `runuser` (preferred) or `env -i su -` to cleanly switch to `noc-alice`.
 
-## 2. Directory Layout
+## 2. Implementation Options
 
-* **`ansible/manage_keys.yml`**: Main playbook.
-* **`ansible/tasks/deploy_gateway.yml`**: Logic to deploy a single gateway.
-* **`ansible/public_keys/`**: Directory of keys organized by gateway.
-    * `noc/` -> Keys for the NOC team.
-    * `sre/` -> Keys for the SRE team.
+You can implement this system using one of two methods depending on your scale.
+
+### Option 1: Manual Installation (Single Host)
+Use this for quick testing or managing a single bastion host without Ansible.
+
+1.  **Run the Installer:**
+    ```bash
+    # Edits sshd_config, creates 'noc' user, installs handoff script
+    sudo ./install.sh
+    ```
+    *By default, this sets up the 'noc' gateway user.*
+
+2.  **Add Users:**
+    You must manually create the key file.
+    ```bash
+    # Create the file if it doesn't exist
+    sudo touch /etc/ssh/authorized_keys.d/noc
+    
+    # Add a user line (Format MUST be exact):
+    # command="sudo /usr/local/bin/ssh-handoff.sh <username>",<options> <key-type> <key-blob> <comment>
+    echo 'command="sudo /usr/local/bin/ssh-handoff.sh alice",no-port-forwarding,no-x11-forwarding,no-agent-forwarding ssh-rsa AAAA... alice@laptop' | sudo tee -a /etc/ssh/authorized_keys.d/noc
+    ```
+
+3.  **Remove Users:**
+    Manually delete the line from `/etc/ssh/authorized_keys.d/noc` and run `sudo userdel -r noc-alice`.
+
+### Option 2: Ansible Deployment (Fleet Management)
+Use this to manage multiple gateways across many servers.
+
+1.  **Directory Layout:**
+    * `ansible/manage_keys.yml`: Main playbook.
+    * `ansible/tasks/deploy_gateway.yml`: Logic to deploy a single gateway.
+    * `ansible/public_keys/`: Directory of keys organized by gateway.
+        * `noc/` -> Keys for the NOC team.
+        * `sre/` -> Keys for the SRE team.
+
+2.  **Usage:**
+    * **Add Keys:** Create `ansible/public_keys/<gateway>/<user>.keys`.
+    * **Run Playbook:** `ansible-playbook ansible/manage_keys.yml`.
+
+3.  **Automatic Cleanup:**
+    * If you delete a key file locally and run the playbook, Ansible will automatically remove the key from the server AND delete the corresponding system user (`noc-alice`) and home directory.
 
 ## 3. Security Features
 
@@ -39,8 +76,3 @@ This repository provides a robust "Jump Host" or "Bastion" infrastructure using 
 * **Path Safety:** Uses `readlink -f` to resolve paths and block symlinks.
 * **Audit Logging:** Logs the SHA fingerprint of the key used for access.
 * **Regex Verification:** Enforces that the authentication key matches the authorized command structure.
-
-## 4. Usage
-
-1.  **Add Keys:** Create `ansible/public_keys/<gateway>/<user>.keys`.
-2.  **Run Playbook:** `ansible-playbook ansible/manage_keys.yml`.
