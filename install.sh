@@ -5,7 +5,8 @@ set -e
 # --- Configuration ---
 readonly SCRIPT_PATH="/usr/local/bin/ssh-handoff.sh"
 readonly SUDOERS_FILE="/etc/sudoers.d/99-ssh-handoff"
-readonly GATEWAY_USER="noc"
+# Allow overriding gateway user with first arg (default: noc)
+readonly GATEWAY_USER="${1:-noc}"
 readonly AUTH_KEYS_DIR="/etc/ssh/authorized_keys.d"
 readonly AUTH_KEYS_FILE="$AUTH_KEYS_DIR/$GATEWAY_USER"
 readonly SSH_CONFIG_FILE="/etc/ssh/sshd_config"
@@ -16,7 +17,7 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-echo "Starting SSH-Handoff installation..."
+echo "Starting SSH-Handoff installation for gateway: $GATEWAY_USER"
 
 # --- 2. Create Gateway User ---
 if ! id "$GATEWAY_USER" &>/dev/null; then

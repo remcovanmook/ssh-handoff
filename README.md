@@ -33,10 +33,12 @@ Use this for quick testing or managing a single bastion host without Ansible.
 
 1.  **Run the Installer:**
     ```bash
-    # Edits sshd_config, creates 'noc' user, installs handoff script
+    # Installs for default user 'noc'
     sudo ./install.sh
+    
+    # OR specify a custom gateway user
+    sudo ./install.sh sre
     ```
-    *By default, this sets up the 'noc' gateway user.*
 
 2.  **Add Users:**
     You must manually create the key file.
