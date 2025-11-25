@@ -4,12 +4,14 @@ set -e
 
 # --- Configuration ---
 readonly SCRIPT_PATH="/usr/local/bin/ssh-handoff.sh"
-readonly SUDOERS_FILE="/etc/sudoers.d/99-ssh-handoff"
-# Allow overriding gateway user with first arg (default: noc)
+readonly SUDOERS_COMMON="/etc/sudoers.d/00-ssh-handoff-common"
 readonly GATEWAY_USER="${1:-noc}"
+readonly SUDOERS_USER_FILE="/etc/sudoers.d/99-ssh-handoff-${GATEWAY_USER}"
 readonly AUTH_KEYS_DIR="/etc/ssh/authorized_keys.d"
 readonly AUTH_KEYS_FILE="$AUTH_KEYS_DIR/$GATEWAY_USER"
 readonly SSH_CONFIG_FILE="/etc/ssh/sshd_config"
+readonly SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
+readonly SSH_DROPIN_FILE="$SSH_DROPIN_DIR/gateway-${GATEWAY_USER}.conf"
 
 # --- 1. Root Check ---
 if [ "$(id -u)" -ne 0 ]; then
@@ -22,7 +24,12 @@ echo "Starting SSH-Handoff installation for gateway: $GATEWAY_USER"
 # --- 2. Create Gateway User ---
 if ! id "$GATEWAY_USER" &>/dev/null; then
     echo "Creating user '$GATEWAY_USER'..."
-    useradd -m -s /usr/sbin/nologin -L "$GATEWAY_USER"
+    # Valid shell required for forced command to execute
+    useradd -m -s /bin/bash "$GATEWAY_USER"
+    
+    # Set invalid password (*) to prevent password login
+    # But DO NOT use usermod -L (lock) as it triggers PAM denials on some systems
+    usermod -p '*' "$GATEWAY_USER"
 else
     echo "User '$GATEWAY_USER' already exists."
 fi
@@ -170,11 +177,12 @@ fi
 ESCAPED_BLOB=$(printf '%s\n' "$AUTH_KEY_BLOB" | sed 's/+/\\+/g')
 
 # Construct Strict Regex
-MATCH_PATTERN="^command=\".*ssh-handoff\.sh $REQUESTED_USER\",.* $AUTH_KEY_TYPE $ESCAPED_BLOB"
+# FIXED: Removed comma and options. Now expects: command="..." ssh-rsa ...
+MATCH_PATTERN="^command=\".*ssh-handoff\.sh $REQUESTED_USER\" $AUTH_KEY_TYPE $ESCAPED_BLOB"
 
 # Verify against file
 if ! grep -qE "$MATCH_PATTERN" "$AUTHORIZED_KEYS_FILE"; then
-    log_and_exit "Security Mismatch: Key used is not authorized for user '$REQUESTED_USER' with correct options."
+    log_and_exit "Security Mismatch: Key used is not authorized for user '$REQUESTED_USER'."
 fi
 
 # Calculate fingerprint for logging
@@ -217,7 +225,6 @@ if ! id "$TARGET_USER" &>/dev/null; then
                     {
                         echo ""
                         echo "# Shared team tools (added by ssh-handoff)"
-                        # We inject the gateway home path
                         echo "TEAMTOOLS_DIR=\"$GATEWAY_HOME/bin\""
                         echo "if [ -d \"\$TEAMTOOLS_DIR\" ]; then"
                         echo "    TT_UID=\$(stat -f \"%u\" \"\$TEAMTOOLS_DIR\" 2>/dev/null || stat -c \"%u\" \"\$TEAMTOOLS_DIR\" 2>/dev/null)"
@@ -235,7 +242,6 @@ if ! id "$TARGET_USER" &>/dev/null; then
                         echo "fi"
                     } >> "$BASH_RC"
 
-                    # Ensure permissions are correct
                     chown "$TARGET_USER:$GATEWAY_USER" "$BASH_RC"
                     chmod 0600 "$BASH_RC"
                     logger -t ssh-handoff "Injected secure PATH check into $BASH_RC"
@@ -264,31 +270,42 @@ SCRIPT_CONTENT
 chown root:root "$SCRIPT_PATH"
 chmod 700 "$SCRIPT_PATH"
 
-# --- 5. Create 'sudoers' File ---
-echo "Configuring sudoers at $SUDOERS_FILE..."
-cat <<SUDO_CONTENT > "$SUDOERS_FILE"
-# This file is managed by ssh-handoff
-# 1. Keep SSH_USER_AUTH so the script can see the key fingerprint
+# --- 5. Create 'sudoers' Files ---
+echo "Configuring sudoers..."
+
+# Global Defaults
+cat <<SUDO_COMMON > "$SUDOERS_COMMON"
+# Global Defaults for SSH Handoff
 Defaults env_keep += "SSH_USER_AUTH"
-# 2. Allow the gateway user to run the handoff script as root
+SUDO_COMMON
+chmod 440 "$SUDOERS_COMMON"
+
+# Per-Gateway Access
+cat <<SUDO_USER > "$SUDOERS_USER_FILE"
+# Sudo access for gateway: $GATEWAY_USER
 $GATEWAY_USER    ALL=(root)    NOPASSWD: $SCRIPT_PATH
-SUDO_CONTENT
-chmod 440 "$SUDOERS_FILE"
-echo "Sudoers rule created."
+SUDO_USER
+chmod 440 "$SUDOERS_USER_FILE"
 
-# --- 6. Harden 'sshd_config' ---
-echo "Hardening $SSH_CONFIG_FILE..."
+echo "Sudoers rules created."
 
-# Standard Settings
-sed -i -E 's/^[ \t]*#[ \t]*(PasswordAuthentication).*/\1 yes/g' "$SSH_CONFIG_FILE"
-sed -i -E 's/^[ \t]*(PasswordAuthentication).*/\1 yes/g' "$SSH_CONFIG_FILE"
+# --- 6. Configure SSHD (Modular) ---
+echo "Configuring SSHD..."
+
+# Ensure Drop-in Directory Exists
+mkdir -p "$SSH_DROPIN_DIR"
+
+# Ensure Include directive is present in main config
+if ! grep -q "^Include $SSH_DROPIN_DIR/\*.conf" "$SSH_CONFIG_FILE"; then
+    # Add Include at the very top
+    sed -i "1i Include $SSH_DROPIN_DIR/*.conf" "$SSH_CONFIG_FILE"
+    echo "Added Include directive to $SSH_CONFIG_FILE"
+fi
+
+# Enable Global Settings
 sed -i -E 's/^[ \t]*#[ \t]*(PubkeyAuthentication).*/\1 yes/g' "$SSH_CONFIG_FILE"
 sed -i -E 's/^[ \t]*(PubkeyAuthentication).*/\1 yes/g' "$SSH_CONFIG_FILE"
-sed -i -E 's/^[ \t]*#[ \t]*(ChallengeResponseAuthentication).*/\1 no/g' "$SSH_CONFIG_FILE"
-sed -i -E 's/^[ \t]*(ChallengeResponseAuthentication).*/\1 no/g' "$SSH_CONFIG_FILE"
-sed -i -E 's/^[ \t]*(AllowUsers).*/# \1 (Removed by ssh-handoff)/g' "$SSH_CONFIG_FILE"
 
-# Enable ExposeAuthInfo
 if ! grep -q "^[ \t]*ExposeAuthInfo" "$SSH_CONFIG_FILE"; then
     echo "ExposeAuthInfo yes" >> "$SSH_CONFIG_FILE"
 else
@@ -296,20 +313,23 @@ else
     sed -i -E 's/^[ \t]*(ExposeAuthInfo).*/\1 yes/g' "$SSH_CONFIG_FILE"
 fi
 
-# Add DenyUsers
-DENY_PATTERN="${GATEWAY_USER}-*"
-if ! grep -q -E "^[ \t]*DenyUsers[ \t].*$DENY_PATTERN" "$SSH_CONFIG_FILE"; then
-    echo "" >> "$SSH_CONFIG_FILE"
-    echo "DenyUsers $DENY_PATTERN" >> "$SSH_CONFIG_FILE"
-fi
+# Create Drop-in Config for Gateway
+cat <<SSHD_DROPIN > "$SSH_DROPIN_FILE"
+# SSH Handoff Config for Gateway: $GATEWAY_USER
+# Created by install.sh
 
-# Match Block for Gateway User
-if ! grep -q "Match User $GATEWAY_USER" "$SSH_CONFIG_FILE"; then
-    echo "" >> "$SSH_CONFIG_FILE"
-    echo "Match User $GATEWAY_USER" >> "$SSH_CONFIG_FILE"
-    echo "    PasswordAuthentication no" >> "$SSH_CONFIG_FILE"
-    echo "    AuthorizedKeysFile /etc/ssh/authorized_keys.d/%u" >> "$SSH_CONFIG_FILE"
-fi
+DenyUsers ${GATEWAY_USER}-*
+
+Match User $GATEWAY_USER
+    PasswordAuthentication no
+    AuthorizedKeysFile $AUTH_KEYS_DIR/%u
+    AllowTcpForwarding no
+    X11Forwarding no
+    AllowAgentForwarding no
+SSHD_DROPIN
+
+chmod 644 "$SSH_DROPIN_FILE"
+echo "Created drop-in config: $SSH_DROPIN_FILE"
 
 # --- 7. Restart SSHD ---
 echo "Restarting SSH service..."

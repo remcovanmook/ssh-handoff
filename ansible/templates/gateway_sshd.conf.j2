@@ -1,0 +1,18 @@
+#
+# SSH Handoff Config for Gateway: {{ gateway_user }}
+# Managed by Ansible - Do not edit manually
+#
+
+# 1. Block direct access to auto-created users
+DenyUsers {{ gateway_user }}-*
+
+# 2. Restrict the Gateway User
+# - Force Key Auth (password bypassing the script is blocked)
+# - Point to secure key file location
+# - Disable forwarding to lock down the tunnel
+Match User {{ gateway_user }}
+    PasswordAuthentication no
+    AuthorizedKeysFile {{ target_auth_dir }}/%u
+    AllowTcpForwarding no
+    X11Forwarding no
+    AllowAgentForwarding no

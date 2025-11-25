@@ -126,11 +126,12 @@ fi
 ESCAPED_BLOB=$(printf '%s\n' "$AUTH_KEY_BLOB" | sed 's/+/\\+/g')
 
 # Construct Strict Regex
-MATCH_PATTERN="^command=\".*ssh-handoff\.sh $REQUESTED_USER\",.* $AUTH_KEY_TYPE $ESCAPED_BLOB"
+# FIXED: Removed comma and options. Now expects: command="..." ssh-rsa ...
+MATCH_PATTERN="^command=\".*ssh-handoff\.sh $REQUESTED_USER\" $AUTH_KEY_TYPE $ESCAPED_BLOB"
 
 # Verify against file
 if ! grep -qE "$MATCH_PATTERN" "$AUTHORIZED_KEYS_FILE"; then
-    log_and_exit "Security Mismatch: Key used is not authorized for user '$REQUESTED_USER' with correct options."
+    log_and_exit "Security Mismatch: Key used is not authorized for user '$REQUESTED_USER'."
 fi
 
 # Calculate fingerprint for logging
@@ -173,7 +174,6 @@ if ! id "$TARGET_USER" &>/dev/null; then
                     {
                         echo ""
                         echo "# Shared team tools (added by ssh-handoff)"
-                        # We inject the gateway home path
                         echo "TEAMTOOLS_DIR=\"$GATEWAY_HOME/bin\""
                         echo "if [ -d \"\$TEAMTOOLS_DIR\" ]; then"
                         echo "    TT_UID=\$(stat -f \"%u\" \"\$TEAMTOOLS_DIR\" 2>/dev/null || stat -c \"%u\" \"\$TEAMTOOLS_DIR\" 2>/dev/null)"
@@ -191,7 +191,6 @@ if ! id "$TARGET_USER" &>/dev/null; then
                         echo "fi"
                     } >> "$BASH_RC"
 
-                    # Ensure permissions are correct
                     chown "$TARGET_USER:$GATEWAY_USER" "$BASH_RC"
                     chmod 0600 "$BASH_RC"
                     logger -t ssh-handoff "Injected secure PATH check into $BASH_RC"

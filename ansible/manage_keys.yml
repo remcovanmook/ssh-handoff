@@ -11,7 +11,7 @@
     key_source_root: "./public_keys"
     target_auth_dir: "/etc/ssh/authorized_keys.d"
     handoff_script_path: "/usr/local/bin/ssh-handoff.sh"
-    ssh_options: "no-port-forwarding,no-x11-forwarding,no-agent-forwarding"
+    # ssh_options REMOVED - configured in sshd_config match blocks
 
   tasks:
     # --- Global Setup ---
@@ -32,14 +32,31 @@
         group: root
         mode: '0700'
 
-    - name: "Update sudoers to keep SSH_USER_AUTH env var"
-      ansible.builtin.lineinfile:
-        path: "/etc/sudoers.d/99-ssh-handoff"
-        line: 'Defaults env_keep += "SSH_USER_AUTH"'
-        create: yes
+    - name: "Configure global sudoers defaults for ssh-handoff"
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/00-ssh-handoff-common"
+        content: 'Defaults env_keep += "SSH_USER_AUTH"'
         mode: '0440'
+        validate: 'visudo -cf %s'
 
-    - name: "Enable ExposeAuthInfo in sshd_config"
+    # --- SSH Config Modularization ---
+    
+    - name: "Ensure sshd_config.d directory exists"
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+        mode: '0755'
+
+    - name: "Ensure sshd_config includes .d directory"
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^Include /etc/ssh/sshd_config.d/\*.conf'
+        line: 'Include /etc/ssh/sshd_config.d/*.conf'
+        insertbefore: BOF
+        state: present
+      notify: Restart SSH
+
+    - name: "Enable ExposeAuthInfo in global config"
       ansible.builtin.lineinfile:
         path: /etc/ssh/sshd_config
         regexp: '^ExposeAuthInfo'

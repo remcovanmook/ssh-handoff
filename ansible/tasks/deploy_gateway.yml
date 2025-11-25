@@ -1,13 +1,17 @@
 ---
 # Tasks to deploy a single gateway user (e.g. 'noc' or 'sre')
 
+# Use password: '*' to create an invalid password hash (disabling password auth)
+# BUT set password_lock: no to avoid the '!' prefix which triggers PAM denials.
+# Use /bin/bash (or valid shell) because sshd needs to spawn a shell to run the forced command.
 - name: "Ensure gateway user '{{ gateway_user }}' exists"
   ansible.builtin.user:
     name: "{{ gateway_user }}"
-    shell: /usr/sbin/nologin
+    shell: /bin/bash
     create_home: yes
     state: present
-    password_lock: yes
+    password: '*'
+    password_lock: no
 
 # --- Bin Directory & Permissions ---
 
@@ -21,7 +25,7 @@
   ansible.builtin.file:
     path: "/home/{{ gateway_user }}/bin"
     state: directory
-    # UPDATED: Owned by root to satisfy the secure path check in ssh-handoff
+    # Owned by root to satisfy the secure path check in ssh-handoff
     owner: root
     group: "{{ gateway_user }}"
     mode: '0750'
@@ -47,31 +51,24 @@
   vars:
     user_key_files: "{{ gateway_key_files.files }}"
 
-# --- Sudo & SSH Access ---
+# --- Sudo Access ---
 
 - name: "Allow {{ gateway_user }} to run handoff script via sudo"
-  ansible.builtin.lineinfile:
-    path: "/etc/sudoers.d/99-ssh-handoff"
-    line: "{{ gateway_user }}    ALL=(root)    NOPASSWD: {{ handoff_script_path }}"
-    state: present
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/99-ssh-handoff-{{ gateway_user }}"
+    content: "{{ gateway_user }}    ALL=(root)    NOPASSWD: {{ handoff_script_path }}"
+    mode: '0440'
     validate: 'visudo -cf %s'
 
-- name: "Configure DenyUsers for {{ gateway_user }} targets"
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "^DenyUsers {{ gateway_user }}-\\*"
-    line: "DenyUsers {{ gateway_user }}-*"
-    state: present
-  notify: Restart SSH
+# --- SSH Modular Config ---
 
-- name: "Configure Match User block for {{ gateway_user }}"
-  ansible.builtin.blockinfile:
-    path: /etc/ssh/sshd_config
-    marker: "# {mark} ANSIBLE MANAGED BLOCK FOR {{ gateway_user }}"
-    block: |
-      Match User {{ gateway_user }}
-          PasswordAuthentication no
-          AuthorizedKeysFile {{ target_auth_dir }}/%u
+- name: "Deploy sshd config drop-in for {{ gateway_user }}"
+  ansible.builtin.template:
+    src: ../templates/gateway_sshd.conf.j2
+    dest: "/etc/ssh/sshd_config.d/gateway-{{ gateway_user }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
   notify: Restart SSH
 
 # --- User Cleanup Logic ---

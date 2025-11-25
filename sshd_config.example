@@ -1,0 +1,7 @@
+# /etc/ssh/sshd_config
+# Minimal Main Config - Relies on Drop-ins
+
+Include /etc/ssh/sshd_config.d/*.conf
+
+PubkeyAuthentication yes
+ExposeAuthInfo yes

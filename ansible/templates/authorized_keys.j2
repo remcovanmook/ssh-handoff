@@ -10,7 +10,7 @@
 # --- Keys for user: {{ base_username }} (Target: {{ gateway_user }}-{{ base_username }}) ---
 {%   for key_line in lookup('file', keyfile.path).splitlines() %}
 {%     if key_line and not key_line.startswith('#') %}
-command="sudo {{ handoff_script_path }} {{ base_username }}",{{ ssh_options }} {{ key_line }}
+command="sudo {{ handoff_script_path }} {{ base_username }}" {{ key_line }}
 {%     endif %}
 {%   endfor %}
 

@@ -1,0 +1,6 @@
+# /etc/ssh/authorized_keys.d/noc
+# Example format for manual setup.
+# Note: No SSH options here (handled by sshd_config Match block)
+
+# User: Alice
+command="sudo /usr/local/bin/ssh-handoff.sh alice" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQ... alice@laptop
