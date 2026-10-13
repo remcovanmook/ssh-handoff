@@ -30,6 +30,14 @@
     group: "{{ gateway_user }}"
     mode: '0750'
 
+- name: "Deploy shared environment for {{ gateway_user }}"
+  ansible.builtin.template:
+    src: ../templates/gateway_env.sh.j2
+    dest: "{{ handoff_env_dir }}/{{ gateway_user }}.sh"
+    owner: root
+    group: root
+    mode: '0644'
+
 # --- Authorized Keys Management ---
 
 - name: "Find local key files for {{ gateway_user }}"

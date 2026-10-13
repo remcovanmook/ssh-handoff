@@ -10,6 +10,8 @@
     
     key_source_root: "./public_keys"
     target_auth_dir: "/etc/ssh/authorized_keys.d"
+    # Must match ENV_DIR in files/ssh-handoff.sh
+    handoff_env_dir: "/etc/ssh-handoff"
     handoff_script_path: "/usr/local/bin/ssh-handoff.sh"
     # Must match MIN_ID / MAX_ID in files/ssh-handoff.sh
     handoff_uid_min: 2000
@@ -17,12 +19,26 @@
     sshd_service_name: "{{ 'ssh' if ansible_facts.os_family == 'Debian' else 'sshd' }}"
     # ssh_options REMOVED - configured in sshd_config match blocks
 
+    # Optional team-wide variables, exported via <handoff_env_dir>/<gateway>.sh
+    gateway_env_vars: {}
+    #   noc:
+    #     TEAM: noc
+    #     EDITOR: vim
+
   tasks:
     # --- Global Setup ---
     
     - name: "Ensure secure authorized_keys directory exists"
       ansible.builtin.file:
         path: "{{ target_auth_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: "Ensure shared environment directory exists"
+      ansible.builtin.file:
+        path: "{{ handoff_env_dir }}"
         state: directory
         owner: root
         group: root

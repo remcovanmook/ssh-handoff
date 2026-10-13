@@ -1,0 +1,29 @@
+#
+# Shared environment for Gateway: {{ gateway_user }}
+# Managed by Ansible - Do not edit manually
+#
+# Sourced from the .bashrc of every {{ gateway_user }}-* user. Add team-wide
+# variables via 'gateway_env_vars' in manage_keys.yml.
+#
+
+# Team tools: prepend the gateway's bin dir to PATH, but only if it is a real
+# directory owned by root and not writable by group or other.
+_tt_dir="/home/{{ gateway_user }}/bin"
+if [ -d "$_tt_dir" ] && [ ! -L "$_tt_dir" ] \
+    && read -r _tt_uid _tt_mode < <(stat -c '%u %a' -- "$_tt_dir" 2>/dev/null) \
+    && [ "$_tt_uid" = 0 ] && [[ "$_tt_mode" =~ ^[0-7]+$ ]] \
+    && (( (8#$_tt_mode & 022) == 0 )); then
+    case ":$PATH:" in
+        *:"$_tt_dir":*) ;;
+        *) PATH="$_tt_dir:$PATH" ;;
+    esac
+fi
+unset _tt_dir _tt_uid _tt_mode
+{% set env_vars = gateway_env_vars[gateway_user] | default({}) %}
+{% if env_vars %}
+
+# Team variables
+{%   for name, value in env_vars.items() %}
+export {{ name }}={{ value | string | quote }}
+{%   endfor %}
+{% endif %}

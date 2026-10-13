@@ -9,6 +9,8 @@ readonly GATEWAY_USER="${1:-noc}"
 readonly SUDOERS_USER_FILE="/etc/sudoers.d/99-ssh-handoff-${GATEWAY_USER}"
 readonly AUTH_KEYS_DIR="/etc/ssh/authorized_keys.d"
 readonly AUTH_KEYS_FILE="$AUTH_KEYS_DIR/$GATEWAY_USER"
+readonly ENV_DIR="/etc/ssh-handoff"
+readonly ENV_FILE="$ENV_DIR/$GATEWAY_USER.sh"
 readonly SSH_CONFIG_FILE="/etc/ssh/sshd_config"
 readonly SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
 readonly SSH_DROPIN_FILE="$SSH_DROPIN_DIR/gateway-${GATEWAY_USER}.conf"
@@ -45,6 +47,46 @@ touch "$AUTH_KEYS_FILE"
 chown root:root "$AUTH_KEYS_FILE"
 chmod 644 "$AUTH_KEYS_FILE"
 
+# --- 3b. Shared Environment File ---
+# Sourced from each $GATEWAY_USER-* user's .bashrc. Left alone if it already
+# exists so local additions (team variables etc.) survive a re-run.
+echo "Creating directory $ENV_DIR..."
+mkdir -p "$ENV_DIR"
+chown root:root "$ENV_DIR"
+chmod 755 "$ENV_DIR"
+
+if [ ! -f "$ENV_FILE" ]; then
+    echo "Creating shared environment file $ENV_FILE..."
+    GATEWAY_HOME=$(getent passwd "$GATEWAY_USER" | cut -d: -f6)
+    {
+        echo "#"
+        echo "# Shared environment for Gateway: $GATEWAY_USER"
+        echo "# Sourced from the .bashrc of every $GATEWAY_USER-* user."
+        echo "# Add team-wide variables at the bottom (export NAME=value)."
+        echo "#"
+        echo ""
+        echo "# Team tools: prepend the gateway's bin dir to PATH, but only if it is a real"
+        echo "# directory owned by root and not writable by group or other."
+        echo "_tt_dir=\"$GATEWAY_HOME/bin\""
+        cat <<'ENV_CONTENT'
+if [ -d "$_tt_dir" ] && [ ! -L "$_tt_dir" ] \
+    && read -r _tt_uid _tt_mode < <(stat -c '%u %a' -- "$_tt_dir" 2>/dev/null) \
+    && [ "$_tt_uid" = 0 ] && [[ "$_tt_mode" =~ ^[0-7]+$ ]] \
+    && (( (8#$_tt_mode & 022) == 0 )); then
+    case ":$PATH:" in
+        *:"$_tt_dir":*) ;;
+        *) PATH="$_tt_dir:$PATH" ;;
+    esac
+fi
+unset _tt_dir _tt_uid _tt_mode
+ENV_CONTENT
+    } > "$ENV_FILE"
+else
+    echo "Shared environment file $ENV_FILE already exists, leaving it alone."
+fi
+chown root:root "$ENV_FILE"
+chmod 644 "$ENV_FILE"
+
 # --- 4. Create the Handoff Script ---
 echo "Creating handoff script at $SCRIPT_PATH..."
 # Same content as ansible/files/ssh-handoff.sh
@@ -65,6 +107,8 @@ readonly MAX_ID=5000
 readonly EXPECTED_OWNER_UID=0
 readonly MAX_USERNAME_LEN=32
 readonly AUTH_KEYS_DIR="/etc/ssh/authorized_keys.d"
+# Per-gateway shared environment (<gateway>.sh), root-owned
+readonly ENV_DIR="/etc/ssh-handoff"
 
 # === Arguments ===
 # $1 is the requested user (e.g. "alice")
@@ -208,49 +252,48 @@ if ! id "$TARGET_USER" &>/dev/null; then
              log_and_exit "Failed to create user $TARGET_USER."
         fi
     else
-        # --- PATH Injection ---
+        # --- Shared Environment Hook ---
+        # .bashrc only gets a stub that sources ${ENV_DIR}/<gateway>.sh.
+        # Shared code and variables live in that root-owned file, so changes
+        # reach existing users without rewriting their .bashrc.
         TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
-        GATEWAY_HOME=$(getent passwd "$GATEWAY_USER" | cut -d: -f6)
         BASH_RC="$TARGET_HOME/.bashrc"
-        
-        if [ -d "$TARGET_HOME" ] && [ -n "$GATEWAY_HOME" ]; then
+
+        if [ -d "$TARGET_HOME" ]; then
             # create if missing
             if [ ! -f "$BASH_RC" ]; then
                 install -m 0600 -o "$TARGET_USER" -g "$GATEWAY_USER" /dev/null "$BASH_RC"
             fi
 
-            # refuse to modify if it is a symlink or unsafe
+            # refuse to modify if it is a symlink
             if [ -L "$BASH_RC" ]; then
-                logger -t ssh-handoff "WARN: .bashrc for $TARGET_USER is a symlink - skipping PATH injection"
-            else
-                # Idempotency check
-                if ! grep -Fq "Shared team tools (added by ssh-handoff)" "$BASH_RC"; then
-                    {
-                        echo ""
-                        echo "# Shared team tools (added by ssh-handoff)"
-                        echo "TEAMTOOLS_DIR=\"$GATEWAY_HOME/bin\""
-                        # GNU 'stat -c' first: GNU 'stat -f' means --file-system and
-                        # would treat the format string as a filename.
-                        # Trust the dir only if root-owned and not group/other writable.
-                        cat <<'BASHRC'
-if [ -d "$TEAMTOOLS_DIR" ]; then
-    TT_UID=$(stat -c '%u' "$TEAMTOOLS_DIR" 2>/dev/null || stat -f '%u' "$TEAMTOOLS_DIR" 2>/dev/null)
-    TT_MODE=$(stat -c '%a' "$TEAMTOOLS_DIR" 2>/dev/null || stat -f '%Lp' "$TEAMTOOLS_DIR" 2>/dev/null)
-    if [ "$TT_UID" = "0" ] && [[ "$TT_MODE" =~ ^[0-7]+$ ]] && (( (8#$TT_MODE & 022) == 0 )); then
-        case ":$PATH:" in
-            *:"$TEAMTOOLS_DIR":*) ;;
-            *) PATH="$TEAMTOOLS_DIR:$PATH" ;;
-        esac
-    fi
-    unset TT_UID TT_MODE
+                logger -t ssh-handoff "WARN: .bashrc for $TARGET_USER is a symlink - skipping environment hook"
+            elif ! grep -Fq "Shared team environment (added by ssh-handoff)" "$BASH_RC"; then
+                {
+                    echo ""
+                    echo "# Shared team environment (added by ssh-handoff)"
+                    echo "SSH_HANDOFF_ENV=\"$ENV_DIR/$GATEWAY_USER.sh\""
+                    # Source only if the file and its directory are root-owned
+                    # and not writable by group or other.
+                    cat <<'BASHRC'
+_ssh_handoff_trusted() {
+    local uid mode
+    read -r uid mode < <(stat -c '%u %a' -- "$1" 2>/dev/null) || return 1
+    [ "$uid" = 0 ] && [[ "$mode" =~ ^[0-7]+$ ]] && (( (8#$mode & 022) == 0 ))
+}
+if [ -f "$SSH_HANDOFF_ENV" ] && [ ! -L "$SSH_HANDOFF_ENV" ] \
+    && _ssh_handoff_trusted "${SSH_HANDOFF_ENV%/*}" \
+    && _ssh_handoff_trusted "$SSH_HANDOFF_ENV"; then
+    . "$SSH_HANDOFF_ENV"
 fi
+unset -f _ssh_handoff_trusted
+unset SSH_HANDOFF_ENV
 BASHRC
-                    } >> "$BASH_RC"
+                } >> "$BASH_RC"
 
-                    chown "$TARGET_USER:$GATEWAY_USER" "$BASH_RC"
-                    chmod 0600 "$BASH_RC"
-                    logger -t ssh-handoff "Injected secure PATH check into $BASH_RC"
-                fi
+                chown "$TARGET_USER:$GATEWAY_USER" "$BASH_RC"
+                chmod 0600 "$BASH_RC"
+                logger -t ssh-handoff "Injected shared environment hook into $BASH_RC"
             fi
         fi
     fi
