@@ -45,4 +45,12 @@ This repository provides a robust "Jump Host" or "Bastion" infrastructure using 
 ## 4. Usage
 
 1.  **Add Keys:** Create `ansible/public_keys/<gateway>/<user>.keys`.
-2.  **Run Playbook:** `ansible-playbook ansible/manage_keys.yml`.
+    * `<user>` must match `^[a-z_][a-z0-9_-]*$`.
+    * One key per line as `<type> <blob> [comment]`. Lines with their own SSH options (`from=`, `no-pty`, ...) are rejected; restrictions live in the sshd drop-in instead.
+2.  **Run Playbook:** `ansible-playbook ansible/manage_keys.yml`. The sshd config is tested with `sshd -t` before any restart.
+
+## 5. License
+
+Copyright 2025 Remco van Mook
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

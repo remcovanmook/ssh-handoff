@@ -122,12 +122,15 @@ if [ -z "$AUTH_KEY_BLOB" ]; then
    log_and_exit "Could not extract authentication key blob."
 fi
 
-# Escape '+' in the base64 blob for regex safety
-ESCAPED_BLOB=$(printf '%s\n' "$AUTH_KEY_BLOB" | sed 's/+/\\+/g')
+# Escape all ERE metacharacters so type and blob match literally
+# (base64 has '+' and '/', key types like sk-ssh-ed25519@openssh.com have '.')
+ESCAPED_TYPE=$(printf '%s\n' "$AUTH_KEY_TYPE" | sed 's/[][\.*^$+?(){}|]/\\&/g')
+ESCAPED_BLOB=$(printf '%s\n' "$AUTH_KEY_BLOB" | sed 's/[][\.*^$+?(){}|]/\\&/g')
 
 # Construct Strict Regex
-# FIXED: Removed comma and options. Now expects: command="..." ssh-rsa ...
-MATCH_PATTERN="^command=\".*ssh-handoff\.sh $REQUESTED_USER\" $AUTH_KEY_TYPE $ESCAPED_BLOB"
+# Expects: command="... ssh-handoff.sh <user>" <type> <blob>[ <comment>]
+# The blob is anchored at both ends so a prefix of a longer blob cannot match.
+MATCH_PATTERN="^command=\"[^\"]*ssh-handoff\.sh $REQUESTED_USER\" $ESCAPED_TYPE $ESCAPED_BLOB( |\$)"
 
 # Verify against file
 if ! grep -qE "$MATCH_PATTERN" "$AUTHORIZED_KEYS_FILE"; then
@@ -162,7 +165,7 @@ if ! id "$TARGET_USER" &>/dev/null; then
         if [ -d "$TARGET_HOME" ] && [ -n "$GATEWAY_HOME" ]; then
             # create if missing
             if [ ! -f "$BASH_RC" ]; then
-                install -m 0600 -o "$TARGET_USER" -g "$TARGET_USER" /dev/null "$BASH_RC"
+                install -m 0600 -o "$TARGET_USER" -g "$GATEWAY_USER" /dev/null "$BASH_RC"
             fi
 
             # refuse to modify if it is a symlink or unsafe
@@ -175,20 +178,22 @@ if ! id "$TARGET_USER" &>/dev/null; then
                         echo ""
                         echo "# Shared team tools (added by ssh-handoff)"
                         echo "TEAMTOOLS_DIR=\"$GATEWAY_HOME/bin\""
-                        echo "if [ -d \"\$TEAMTOOLS_DIR\" ]; then"
-                        echo "    TT_UID=\$(stat -f \"%u\" \"\$TEAMTOOLS_DIR\" 2>/dev/null || stat -c \"%u\" \"\$TEAMTOOLS_DIR\" 2>/dev/null)"
-                        echo "    TT_MODE=\$(stat -f \"%Lp\" \"\$TEAMTOOLS_DIR\" 2>/dev/null || stat -c \"%a\" \"\$TEAMTOOLS_DIR\" 2>/dev/null)"
-                        echo "    case \"\$TT_MODE\" in"
-                        echo "        *[2367]) TT_PERM_BAD=true ;;"
-                        echo "        *) TT_PERM_BAD=false ;;"
-                        echo "    esac"
-                        echo "    if [ \"\$TT_UID\" = \"0\" ] && [ \"\$TT_PERM_BAD\" = false ]; then"
-                        echo "        case \":\$PATH:\" in"
-                        echo "            *:\$TEAMTOOLS_DIR:*) ;;"
-                        echo "            *) PATH=\"\$TEAMTOOLS_DIR:\$PATH\" ;;"
-                        echo "        esac"
-                        echo "    fi"
-                        echo "fi"
+                        # GNU 'stat -c' first: GNU 'stat -f' means --file-system and
+                        # would treat the format string as a filename.
+                        # Trust the dir only if root-owned and not group/other writable.
+                        cat <<'BASHRC'
+if [ -d "$TEAMTOOLS_DIR" ]; then
+    TT_UID=$(stat -c '%u' "$TEAMTOOLS_DIR" 2>/dev/null || stat -f '%u' "$TEAMTOOLS_DIR" 2>/dev/null)
+    TT_MODE=$(stat -c '%a' "$TEAMTOOLS_DIR" 2>/dev/null || stat -f '%Lp' "$TEAMTOOLS_DIR" 2>/dev/null)
+    if [ "$TT_UID" = "0" ] && [[ "$TT_MODE" =~ ^[0-7]+$ ]] && (( (8#$TT_MODE & 022) == 0 )); then
+        case ":$PATH:" in
+            *:"$TEAMTOOLS_DIR":*) ;;
+            *) PATH="$TEAMTOOLS_DIR:$PATH" ;;
+        esac
+    fi
+    unset TT_UID TT_MODE
+fi
+BASHRC
                     } >> "$BASH_RC"
 
                     chown "$TARGET_USER:$GATEWAY_USER" "$BASH_RC"

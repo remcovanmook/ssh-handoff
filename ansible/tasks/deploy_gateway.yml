@@ -41,6 +41,32 @@
   delegate_to: localhost
   become: no
 
+# The template prepends command="..." to each key line, and ssh-handoff.sh
+# expects exactly `command="..." <type> <blob>`. Lines carrying their own
+# options (from=, no-pty, ...) would produce entries sshd rejects, so refuse
+# them here. File names must also be valid handoff usernames.
+- name: "Validate key files for {{ gateway_user }}"
+  ansible.builtin.assert:
+    that:
+      - item.path | basename | splitext | first is match('^[a-z_][a-z0-9_-]*$')
+      - >-
+        lookup('file', item.path).splitlines()
+        | map('trim')
+        | reject('match', '^(#|$)')
+        | reject('match', key_line_regex)
+        | list | length == 0
+    fail_msg: >-
+      {{ item.path }}: file name must match ^[a-z_][a-z0-9_-]*$ and every key
+      line must be '<type> <blob> [comment]' with no leading options
+    quiet: yes
+  loop: "{{ gateway_key_files.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  vars:
+    key_line_regex: '^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com) \S+( .*)?$'
+  delegate_to: localhost
+  become: no
+
 - name: "Generate authorized_keys for {{ gateway_user }}"
   ansible.builtin.template:
     src: ../templates/authorized_keys.j2
@@ -77,21 +103,32 @@
   ansible.builtin.getent:
     database: passwd
 
+# Only consider accounts ssh-handoff.sh could have created: name prefixed
+# with the gateway, primary group is the gateway's group, UID in the handoff
+# range. A name-prefix match alone would also catch e.g. a 'noc-ops' gateway.
+# getent_passwd values are [password, uid, gid, gecos, home, shell].
 - name: "Identify stale {{ gateway_user }} accounts"
   set_fact:
     stale_users: >-
       {{
-        ansible_facts.getent_passwd.keys()
-        | select('match', '^' + gateway_user + '-')
-        | difference(
-            gateway_key_files.files
-            | map(attribute='path')
-            | map('basename')
-            | map('splitext')
-            | map('first')
-            | map('regex_replace', '^', gateway_user + '-')
-            | list
-          )
+        ansible_facts.getent_passwd
+        | dict2items
+        | selectattr('key', 'match', '^' ~ (gateway_user | regex_escape) ~ '-')
+        | selectattr('value.2', 'equalto', ansible_facts.getent_passwd[gateway_user][2])
+        | rejectattr('key', 'in', authorized_users)
+        | map(attribute='key')
+        | list
+      }}
+  vars:
+    authorized_users: >-
+      {{
+        gateway_key_files.files
+        | map(attribute='path')
+        | map('basename')
+        | map('splitext')
+        | map('first')
+        | map('regex_replace', '^', gateway_user + '-')
+        | list
       }}
 
 - name: "Remove stale users for gateway {{ gateway_user }}"
@@ -101,3 +138,6 @@
     remove: yes
     force: yes
   loop: "{{ stale_users }}"
+  when: >-
+    (ansible_facts.getent_passwd[item][1] | int) >= handoff_uid_min and
+    (ansible_facts.getent_passwd[item][1] | int) <= handoff_uid_max

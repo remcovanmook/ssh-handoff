@@ -11,6 +11,10 @@
     key_source_root: "./public_keys"
     target_auth_dir: "/etc/ssh/authorized_keys.d"
     handoff_script_path: "/usr/local/bin/ssh-handoff.sh"
+    # Must match MIN_ID / MAX_ID in files/ssh-handoff.sh
+    handoff_uid_min: 2000
+    handoff_uid_max: 5000
+    sshd_service_name: "{{ 'ssh' if ansible_facts.os_family == 'Debian' else 'sshd' }}"
     # ssh_options REMOVED - configured in sshd_config match blocks
 
   tasks:
@@ -54,6 +58,7 @@
         line: 'Include /etc/ssh/sshd_config.d/*.conf'
         insertbefore: BOF
         state: present
+        validate: '/usr/sbin/sshd -t -f %s'
       notify: Restart SSH
 
     - name: "Enable ExposeAuthInfo in global config"
@@ -61,6 +66,7 @@
         path: /etc/ssh/sshd_config
         regexp: '^ExposeAuthInfo'
         line: 'ExposeAuthInfo yes'
+        validate: '/usr/sbin/sshd -t -f %s'
       notify: Restart SSH
 
     # --- Loop Over Gateways ---
@@ -72,7 +78,15 @@
         loop_var: gateway_user
 
   handlers:
-    - name: Restart SSH
+    # Handlers run in definition order: a failed config test stops the
+    # restart, so a broken drop-in can't take sshd down.
+    - name: Validate sshd config
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+      listen: Restart SSH
+
+    - name: Restart sshd service
       ansible.builtin.service:
-        name: sshd
+        name: "{{ sshd_service_name }}"
         state: restarted
+      listen: Restart SSH

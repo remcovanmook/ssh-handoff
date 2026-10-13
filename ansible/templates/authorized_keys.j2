@@ -8,7 +8,7 @@
 {% for keyfile in user_key_files %}
 {%   set base_username = keyfile.path | basename | splitext | first %}
 # --- Keys for user: {{ base_username }} (Target: {{ gateway_user }}-{{ base_username }}) ---
-{%   for key_line in lookup('file', keyfile.path).splitlines() %}
+{%   for key_line in lookup('file', keyfile.path).splitlines() | map('trim') %}
 {%     if key_line and not key_line.startswith('#') %}
 command="sudo {{ handoff_script_path }} {{ base_username }}" {{ key_line }}
 {%     endif %}
